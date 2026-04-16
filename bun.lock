@@ -1,0 +1,22 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "@authfly/core",
+      "dependencies": {
+        "@teamhanko/hanko-frontend-sdk": "^2",
+      },
+      "devDependencies": {
+        "typescript": "^5.8.3",
+      },
+    },
+  },
+  "packages": {
+    "@teamhanko/hanko-frontend-sdk": ["@teamhanko/hanko-frontend-sdk@2.6.0", "", { "dependencies": { "@types/js-cookie": "^3.0.3" } }, "sha512-ge5Iiiodh98WMsRaahv1B0bQM5Oj6V1LwQ9kYXo8G4xKoq9UTOPpLDubCDG4p42iyalxyDMaKMm0i5ORdxiqcg=="],
+
+    "@types/js-cookie": ["@types/js-cookie@3.0.6", "", {}, "sha512-wkw9yd1kEXOPnvEeEV1Go1MmxtBJL0RR79aOTAApecWFVu7w0NNXNqhcWgvw2YgZDYadliXkl14pa3WXw5jlCQ=="],
+
+    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+  }
+}

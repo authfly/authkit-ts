@@ -1,0 +1,25 @@
+{
+  "name": "@authfly/core",
+  "version": "0.1.0",
+  "description": "AuthFly AuthKit TypeScript core",
+  "type": "module",
+  "main": "dist/authfly-authkit.umd.js",
+  "module": "dist/authfly-authkit.esm.js",
+  "types": "dist/types/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "bun run clean && bun run build:types && bun run build:esm && bun run build:umd",
+    "build:types": "tsc -p tsconfig.build.json",
+    "build:esm": "mkdir -p dist/esm && bun build src/index.ts --outdir dist/esm --format esm --sourcemap && mv dist/esm/index.js dist/authfly-authkit.esm.js && mv dist/esm/index.js.map dist/authfly-authkit.esm.js.map && rmdir dist/esm",
+    "build:umd": "mkdir -p dist/umd && bun build src/umd.ts --outdir dist/umd --format iife --global-name=Authfly --target browser --sourcemap && mv dist/umd/umd.js dist/authfly-authkit.umd.js && mv dist/umd/umd.js.map dist/authfly-authkit.umd.js.map && rmdir dist/umd"
+  },
+  "dependencies": {
+    "@teamhanko/hanko-frontend-sdk": "^2"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}
