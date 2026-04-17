@@ -1,3 +1,4 @@
+import { resolveError } from "./errors";
 import { AuthFlow } from "./flow";
 import type { AuthConfig, AuthState } from "./types";
 
@@ -26,6 +27,7 @@ export class AuthDOMController {
   private readonly config: AuthConfig;
   private readonly options: Required<ControllerOptions>;
   private boundSubmit: ((event: SubmitEvent) => void) | null = null;
+  private restarting = false;
 
   constructor(flow: AuthFlow, options: ControllerOptions = {}) {
     this.flow = flow;
@@ -56,7 +58,7 @@ export class AuthDOMController {
       this.renderState(state);
     } catch (error) {
       this.showForm();
-      this.showError(this.getErrorMessage(error, "Failed to initialize"));
+      this.showError(this.getErrorMessage(error));
     }
   }
 
@@ -65,7 +67,6 @@ export class AuthDOMController {
     if (form && this.boundSubmit) {
       form.removeEventListener("submit", this.boundSubmit);
     }
-
     this.boundSubmit = null;
   }
 
@@ -80,26 +81,30 @@ export class AuthDOMController {
       case "login_method_chooser":
         this.showForm();
         this.hidePasswordField();
+        this.renderInlineError(state);
         break;
       case "login_password":
         this.showForm();
         this.showPasswordField();
+        this.renderInlineError(state);
+        this.handlePasswordRetry(state);
         break;
       case "onboarding_email":
         this.showForm();
         if (!this.config.features?.allowPublicRegistration) {
           this.showError("Registration is not available. Contact your administrator.");
+        } else {
+          this.renderInlineError(state);
         }
         break;
       case "success":
         window.location.href = this.config.successRedirect ?? "/sso/complete";
         break;
       case "error":
-        this.showForm();
-        this.showError(
-          state.error_message ??
-            (typeof state.payload?.error === "string" ? state.payload.error : "Authentication error"),
-        );
+        // The provider gave us a terminal error state. Recover by re-initialising
+        // the flow so the user can retry — but keep the resolved message on
+        // screen instead of leaving them on a dead form.
+        void this.recoverFromErrorState(state);
         break;
       default:
         this.showForm();
@@ -112,7 +117,6 @@ export class AuthDOMController {
     if (!configEl?.textContent) {
       return null;
     }
-
     return JSON.parse(configEl.textContent) as AuthConfig;
   }
 
@@ -140,7 +144,11 @@ export class AuthDOMController {
 
       this.renderState(next);
     } catch (error) {
-      this.showError(this.getErrorMessage(error, "An error occurred"));
+      // Most "errors" surface inside the new state already; this branch only
+      // fires for genuine network/SDK exceptions. Try to recover by restarting
+      // the flow so the user is not stuck on a dead form.
+      this.showError(this.getErrorMessage(error));
+      void this.recoverFromException();
     } finally {
       this.setLoading(false);
     }
@@ -163,6 +171,68 @@ export class AuthDOMController {
         input.name === "username" ? "username webauthn" : "email username webauthn",
       );
       emailInput.focus();
+    }
+
+    this.renderInlineError(state);
+  }
+
+  /**
+   * After a failed password attempt Hanko returns a fresh login_password
+   * state with the error attached. We clear the password field so the user
+   * is prompted to type a new one (some browsers re-fill it from a stale
+   * autofill cache otherwise) and place focus there.
+   */
+  private handlePasswordRetry(state: AuthState): void {
+    const passwordInput = this.getPasswordInput();
+    if (!passwordInput) {
+      return;
+    }
+
+    const hasError =
+      state.error ||
+      state.error_message ||
+      state.actions.password_login?.inputs?.password?.error;
+
+    if (hasError) {
+      passwordInput.value = "";
+      passwordInput.focus();
+      passwordInput.select?.();
+    }
+  }
+
+  private async recoverFromErrorState(state: AuthState): Promise<void> {
+    if (this.restarting) {
+      this.showForm();
+      return;
+    }
+    this.restarting = true;
+    const message = state.error_message ?? this.getErrorMessage(state.error);
+    try {
+      const next = await this.flow.restart({ preserveError: false });
+      this.renderState(next);
+      if (message) {
+        this.showError(message);
+      }
+    } catch (error) {
+      this.showForm();
+      this.showError(this.getErrorMessage(error));
+    } finally {
+      this.restarting = false;
+    }
+  }
+
+  private async recoverFromException(): Promise<void> {
+    if (this.restarting) {
+      return;
+    }
+    this.restarting = true;
+    try {
+      const next = await this.flow.restart({ preserveError: true });
+      this.renderState(next);
+    } catch {
+      // The error message shown by the caller is already meaningful; leave it.
+    } finally {
+      this.restarting = false;
     }
   }
 
@@ -213,9 +283,15 @@ export class AuthDOMController {
     if (!errorEl) {
       return;
     }
-
     errorEl.textContent = message;
     errorEl.classList.remove("hidden");
+  }
+
+  private renderInlineError(state: AuthState): void {
+    const resolved = resolveError(state, this.flow.getCatalog());
+    if (resolved?.message) {
+      this.showError(resolved.message);
+    }
   }
 
   private clearError(): void {
@@ -223,7 +299,6 @@ export class AuthDOMController {
     if (!errorEl) {
       return;
     }
-
     errorEl.textContent = "";
     errorEl.classList.add("hidden");
   }
@@ -233,16 +308,25 @@ export class AuthDOMController {
     if (!button) {
       return;
     }
-
     button.disabled = enabled;
     button.classList.toggle("opacity-50", enabled);
   }
 
-  private getErrorMessage(error: unknown, fallback: string): string {
-    if (error instanceof Error && error.message) {
-      return `${fallback}: ${error.message}`;
+  private getErrorMessage(error: unknown): string {
+    const catalog = this.flow.getCatalog();
+    if (error && typeof error === "object" && "code" in error) {
+      const code = (error as { code?: string }).code;
+      const message =
+        (code && catalog.byCode?.[code]) ||
+        (error as { message?: string }).message ||
+        catalog.fallback;
+      if (message) {
+        return message;
+      }
     }
-
-    return fallback;
+    if (error instanceof Error && error.message) {
+      return error.message;
+    }
+    return catalog.fallback ?? "Authentication error.";
   }
 }

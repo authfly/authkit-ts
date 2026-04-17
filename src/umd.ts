@@ -10,12 +10,12 @@ function bootstrap(): void {
     return;
   }
 
-  const provider = new HankoProvider(config.apiUrl);
+  const provider = new HankoProvider(config.apiUrl, { locale: config.locale });
   const flow = new AuthFlow(provider, config);
   const controller = new AuthDOMController(flow);
 
-  void controller.mount().catch((error) => {
-    console.error("[Authfly] bootstrap failed", error);
+  void controller.mount().catch(() => {
+    // The controller already renders a user-facing error state.
   });
 }
 

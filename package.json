@@ -1,20 +1,50 @@
 {
   "name": "@authfly/core",
-  "version": "0.1.0",
-  "description": "AuthFly AuthKit TypeScript core",
+  "version": "0.2.0",
+  "description": "AuthFly AuthKit TypeScript core: provider-agnostic flow contracts, localized error catalog, and a DOM controller for embedding self-hosted authentication widgets.",
   "type": "module",
   "main": "dist/authfly-authkit.umd.js",
   "module": "dist/authfly-authkit.esm.js",
   "types": "dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/authfly-authkit.esm.js",
+      "default": "./dist/authfly-authkit.umd.js"
+    },
+    "./umd": {
+      "default": "./dist/authfly-authkit.umd.js"
+    }
+  },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "scripts": {
     "clean": "rm -rf dist",
     "build": "bun run clean && bun run build:types && bun run build:esm && bun run build:umd",
     "build:types": "tsc -p tsconfig.build.json",
     "build:esm": "mkdir -p dist/esm && bun build src/index.ts --outdir dist/esm --format esm --sourcemap && mv dist/esm/index.js dist/authfly-authkit.esm.js && mv dist/esm/index.js.map dist/authfly-authkit.esm.js.map && rmdir dist/esm",
-    "build:umd": "mkdir -p dist/umd && bun build src/umd.ts --outdir dist/umd --format iife --global-name=Authfly --target browser --sourcemap && mv dist/umd/umd.js dist/authfly-authkit.umd.js && mv dist/umd/umd.js.map dist/authfly-authkit.umd.js.map && rmdir dist/umd"
+    "build:umd": "mkdir -p dist/umd && bun build src/umd.ts --outdir dist/umd --format iife --global-name=Authfly --target browser --sourcemap && mv dist/umd/umd.js dist/authfly-authkit.umd.js && mv dist/umd/umd.js.map dist/authfly-authkit.umd.js.map && rmdir dist/umd",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit"
+  },
+  "keywords": [
+    "authfly",
+    "authkit",
+    "authentication",
+    "sso",
+    "hanko",
+    "oidc",
+    "saml",
+    "self-hosted"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/authfly/authkit-ts.git"
+  },
+  "peerDependencies": {
+    "@teamhanko/hanko-frontend-sdk": "^2"
   },
   "dependencies": {
     "@teamhanko/hanko-frontend-sdk": "^2"

@@ -1,6 +1,8 @@
+import { resolveCatalog, resolveError, type ResolvedError } from "./errors";
 import type {
   AuthAction,
   AuthConfig,
+  AuthErrorCatalog,
   AuthFlowName,
   AuthInput,
   AuthProvider,
@@ -11,7 +13,6 @@ function getLoginIdentifierAction(state: AuthState | null): AuthAction | null {
   if (!state) {
     return null;
   }
-
   return state.actions.continue_with_login_identifier ?? null;
 }
 
@@ -19,27 +20,59 @@ function getLoginIdentifierInput(action: AuthAction | null): AuthInput | null {
   if (!action?.inputs) {
     return null;
   }
-
   return action.inputs.email ?? action.inputs.username ?? action.inputs.identifier ?? null;
 }
 
 export class AuthFlow {
   private readonly provider: AuthProvider;
   private readonly config: AuthConfig;
+  private readonly catalog: AuthErrorCatalog;
   private currentState: AuthState | null = null;
+  private currentFlow: AuthFlowName = "login";
 
   constructor(provider: AuthProvider, config: AuthConfig) {
     this.provider = provider;
     this.config = config;
+    this.catalog = resolveCatalog(config.locale, config.errorCatalog);
   }
 
   async start(flow: AuthFlowName = "login"): Promise<AuthState> {
+    this.currentFlow = flow;
     const state = await this.provider.init(flow);
     return this.setState(await this.advanceState(state));
   }
 
+  /**
+   * Re-create a fresh flow state, optionally preserving the previous
+   * resolved error_message so the form can show it after recovery.
+   */
+  async restart(options: { preserveError?: boolean } = {}): Promise<AuthState> {
+    const previousError = options.preserveError
+      ? (this.currentState?.error_message ?? this.resolveError()?.message)
+      : undefined;
+    const state = await this.provider.init(this.currentFlow);
+    const next = await this.advanceState(state);
+    if (previousError) {
+      next.error_message = previousError;
+    }
+    return this.setState(next);
+  }
+
   getConfig(): AuthConfig {
     return this.config;
+  }
+
+  getCatalog(): AuthErrorCatalog {
+    return this.catalog;
+  }
+
+  /**
+   * Resolves the most user-friendly message for the current state, preferring
+   * input-level errors with non-generic codes, then state-level errors, then
+   * catalog lookups.
+   */
+  resolveError(): ResolvedError | null {
+    return resolveError(this.currentState, this.catalog);
   }
 
   onSessionCreated(cb: () => void): void {
@@ -132,12 +165,22 @@ export class AuthFlow {
     if (!this.currentState) {
       throw new Error("Auth flow has not started");
     }
-
     return this.currentState;
   }
 
   private setState(state: AuthState): AuthState {
-    this.currentState = state;
-    return state;
+    this.currentState = this.normalizeState(state);
+    return this.currentState;
+  }
+
+  private normalizeState(state: AuthState): AuthState {
+    const resolved = resolveError(state, this.catalog);
+    if (!resolved) {
+      return state;
+    }
+    if (state.error_message === resolved.message) {
+      return state;
+    }
+    return { ...state, error_message: resolved.message };
   }
 }
