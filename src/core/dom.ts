@@ -28,6 +28,18 @@ export class AuthDOMController {
   private readonly options: Required<ControllerOptions>;
   private boundSubmit: ((event: SubmitEvent) => void) | null = null;
   private restarting = false;
+  /**
+   * Cached result of `PublicKeyCredential.isConditionalMediationAvailable()`.
+   * `null` until probed. We probe once during mount() and reuse the value so
+   * that the `webauthn` autocomplete token (which causes Chrome/Edge to spin
+   * up a passkey discovery loop and produces noticeable input lag on devices
+   * without passkeys) is added only when ConditionalUI is actually supported.
+   */
+  private conditionalMediationAvailable: boolean | null = null;
+  /** Last `name` we configured the email input for, to avoid touching DOM
+   *  attributes (which can re-trigger WebAuthn discovery in Chromium) on
+   *  repeat renders of the same identifier state. */
+  private identifierConfiguredFor: string | null = null;
 
   constructor(flow: AuthFlow, options: ControllerOptions = {}) {
     this.flow = flow;
@@ -53,12 +65,34 @@ export class AuthDOMController {
       window.location.href = this.config.successRedirect ?? "/sso/complete";
     });
 
+    // Probe ConditionalUI in parallel with the initial flow handshake — both
+    // are network/IPC bound and there is no reason to serialise them.
+    void this.probeConditionalMediation();
+
     try {
       const state = await this.flow.start("login");
       this.renderState(state);
     } catch (error) {
       this.showForm();
       this.showError(this.getErrorMessage(error));
+    }
+  }
+
+  private async probeConditionalMediation(): Promise<void> {
+    if (this.conditionalMediationAvailable !== null) {
+      return;
+    }
+    try {
+      const PKC = (typeof globalThis !== "undefined"
+        ? (globalThis as unknown as { PublicKeyCredential?: { isConditionalMediationAvailable?: () => Promise<boolean> } }).PublicKeyCredential
+        : undefined);
+      if (PKC && typeof PKC.isConditionalMediationAvailable === "function") {
+        this.conditionalMediationAvailable = await PKC.isConditionalMediationAvailable();
+      } else {
+        this.conditionalMediationAvailable = false;
+      }
+    } catch {
+      this.conditionalMediationAvailable = false;
     }
   }
 
@@ -138,6 +172,21 @@ export class AuthDOMController {
         next = await this.flow.submitPassword(passwordInput?.value ?? "");
       } else if (state.actions.continue_with_login_identifier?.enabled) {
         next = await this.flow.submitIdentifier(emailInput.value);
+        // Auto-chain: Hanko's Flow API requires two round trips for
+        // identifier+password (login_init → login_password → success). When
+        // the user already typed both fields we don't want to force a second
+        // click — submit the password right away if the API moved us into
+        // login_password and the field is non-empty.
+        const passwordValue = passwordInput?.value ?? "";
+        if (
+          passwordValue.length > 0 &&
+          next.name === "login_password" &&
+          next.actions.password_login?.enabled &&
+          !next.error &&
+          !next.error_message
+        ) {
+          next = await this.flow.submitPassword(passwordValue);
+        }
       } else {
         next = await this.flow.submitCurrent();
       }
@@ -164,16 +213,57 @@ export class AuthDOMController {
     this.hidePasswordField();
 
     if (emailInput && input) {
-      emailInput.name = input.name || "identifier";
-      emailInput.type = input.type === "string" ? "text" : input.type;
-      emailInput.setAttribute(
-        "autocomplete",
-        input.name === "username" ? "username webauthn" : "email username webauthn",
-      );
-      emailInput.focus();
+      this.configureIdentifierInput(emailInput, input.name, input.type);
+      // Avoid stealing focus on every re-render: only focus when the input
+      // is empty and not currently focused. Repeated focus() calls cause
+      // layout/paint passes and (on Chromium) re-trigger WebAuthn discovery.
+      if (emailInput.value === "" && document.activeElement !== emailInput) {
+        emailInput.focus();
+      }
     }
 
     this.renderInlineError(state);
+  }
+
+  private configureIdentifierInput(
+    emailInput: HTMLInputElement,
+    name: string | undefined,
+    type: string | undefined,
+  ): void {
+    const safeName = name || "identifier";
+    if (this.identifierConfiguredFor === safeName) {
+      // Same identifier kind as last render. The DOM is already configured;
+      // do nothing so we don't restart Chromium's autofill / WebAuthn
+      // discovery on every re-render of login_identifier.
+      return;
+    }
+    this.identifierConfiguredFor = safeName;
+
+    emailInput.name = safeName;
+    if (type) {
+      const desired = type === "string" ? "text" : type;
+      if (emailInput.type !== desired) {
+        emailInput.type = desired;
+      }
+    }
+    emailInput.setAttribute("autocomplete", this.identifierAutocomplete(safeName));
+    emailInput.setAttribute("enterkeyhint", "next");
+  }
+
+  /**
+   * Build the autocomplete token list for the identifier input.
+   *
+   * The `webauthn` token is added only when ConditionalUI was probed and
+   * confirmed — otherwise Chromium spins up a passkey discovery loop on
+   * every focus/input event, which manifests as a noticeable typing delay
+   * even on devices that have no platform passkeys at all.
+   */
+  private identifierAutocomplete(name: string): string {
+    const base = name === "username" ? "username" : "email username";
+    if (this.conditionalMediationAvailable) {
+      return base + " webauthn";
+    }
+    return base;
   }
 
   /**
@@ -206,6 +296,7 @@ export class AuthDOMController {
       return;
     }
     this.restarting = true;
+    this.identifierConfiguredFor = null;
     const message = state.error_message ?? this.getErrorMessage(state.error);
     try {
       const next = await this.flow.restart({ preserveError: false });
@@ -226,6 +317,7 @@ export class AuthDOMController {
       return;
     }
     this.restarting = true;
+    this.identifierConfiguredFor = null;
     try {
       const next = await this.flow.restart({ preserveError: true });
       this.renderState(next);
